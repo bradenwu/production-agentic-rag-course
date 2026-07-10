@@ -16,6 +16,9 @@ class RAGTracer:
     @contextmanager
     def trace_request(self, user_id: str, query: str):
         """Main request trace context manager."""
+        if not self.tracer.client or not hasattr(self.tracer, 'trace_rag_request'):
+            yield None
+            return
         trace = None
         try:
             with self.tracer.trace_rag_request(
@@ -29,6 +32,9 @@ class RAGTracer:
     @contextmanager
     def trace_embedding(self, trace, query: str):
         """Query embedding operation with timing."""
+        if trace is None:
+            yield None
+            return
         start_time = time.time()
         span = self.tracer.create_span(
             trace=trace, name="query_embedding", input_data={"query": query, "query_length": len(query)}
@@ -44,6 +50,9 @@ class RAGTracer:
     @contextmanager
     def trace_search(self, trace, query: str, top_k: int):
         """Search operation with timing."""
+        if trace is None:
+            yield None
+            return
         span = self.tracer.create_span(trace=trace, name="search_retrieval", input_data={"query": query, "top_k": top_k})
         try:
             yield span
@@ -69,6 +78,9 @@ class RAGTracer:
     @contextmanager
     def trace_prompt_construction(self, trace, chunks: List[Dict]):
         """Prompt building with timing."""
+        if trace is None:
+            yield None
+            return
         span = self.tracer.create_span(trace=trace, name="prompt_construction", input_data={"chunk_count": len(chunks)})
         try:
             yield span
@@ -93,6 +105,9 @@ class RAGTracer:
     @contextmanager
     def trace_generation(self, trace, model: str, prompt: str):
         """LLM generation with timing."""
+        if trace is None:
+            yield None
+            return
         span = self.tracer.create_span(
             trace=trace, name="llm_generation", input_data={"model": model, "prompt_length": len(prompt), "prompt": prompt}
         )
