@@ -1,4 +1,4 @@
-.PHONY: help start stop restart status logs health setup format lint test test-cov clean
+.PHONY: help start start-docker-ollama stop restart status logs health setup format lint test test-cov clean
 
 # Default target
 help: ## Show this help message
@@ -6,8 +6,17 @@ help: ## Show this help message
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}'
 
 # Service management
-start: ## Start all services
-	docker compose up --build -d
+start: ## Start services (auto-detects host Ollama, falls back to Docker Ollama)
+	@if curl -sf http://localhost:11434/api/version > /dev/null 2>&1; then \
+		echo "✓ Host Ollama detected - using http://host.docker.internal:11434"; \
+		OLLAMA_HOST=http://host.docker.internal:11434 docker compose up --build -d; \
+	else \
+		echo "Host Ollama not found - starting Docker Ollama container"; \
+		OLLAMA_HOST=http://ollama:11434 docker compose --profile docker-ollama up --build -d; \
+	fi
+
+start-docker-ollama: ## Force start with Docker Ollama (ignores host Ollama)
+	OLLAMA_HOST=http://ollama:11434 docker compose --profile docker-ollama up --build -d
 
 stop: ## Stop all services
 	docker compose down
