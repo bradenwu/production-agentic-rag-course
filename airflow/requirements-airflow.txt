@@ -4,8 +4,10 @@ sqlalchemy>=1.4.36,<2.0.0
 pydantic>=2.0.0,<3.0.0
 python-dateutil>=2.8.0
 
-# PDF processing dependencies  
-docling>=2.0.0
+# PDF processing dependencies
+# 与 uv.lock 保持一致，避免容器构建时解析到不兼容的新版本和 CUDA 依赖。
+docling==2.52.0
+torch==2.8.0
 
 # Search engine dependencies
 opensearch-py>=2.4.0

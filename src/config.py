@@ -61,10 +61,12 @@ class PDFParserSettings(BaseConfigSettings):
         case_sensitive=False,
     )
 
-    max_pages: int = 30
+    # Docling 在长论文上可能产生较高的瞬时内存峰值；课程检索只需正文前几页。
+    max_pages: int = 5
     max_file_size_mb: int = 20
     do_ocr: bool = False
-    do_table_structure: bool = True
+    # 当前流水线只保存正文和章节，不保存 Docling 的表格结构结果。
+    do_table_structure: bool = False
 
 
 class ChunkingSettings(BaseConfigSettings):

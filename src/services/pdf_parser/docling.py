@@ -1,3 +1,5 @@
+import ctypes
+import gc
 import logging
 from pathlib import Path
 from typing import Optional
@@ -15,13 +17,13 @@ logger = logging.getLogger(__name__)
 class DoclingParser:
     """Docling PDF parser for scientific document processing."""
 
-    def __init__(self, max_pages: int, max_file_size_mb: int, do_ocr: bool = False, do_table_structure: bool = True):
+    def __init__(self, max_pages: int, max_file_size_mb: int, do_ocr: bool = False, do_table_structure: bool = False):
         """Initialize DocumentConverter with optimized pipeline options.
 
         :param max_pages: Maximum number of pages to process
         :param max_file_size_mb: Maximum file size in MB
         :param do_ocr: Enable OCR for scanned PDFs (default: False, very slow)
-        :param do_table_structure: Extract table structures (default: True)
+        :param do_table_structure: 是否提取表格结构（默认关闭，当前流水线不保存该结果）
         """
         # Configure pipeline options
         pipeline_options = PdfPipelineOptions(
@@ -40,11 +42,25 @@ class DoclingParser:
             # This happens only once per DoclingParser instance
             self._warmed_up = True
 
+    @staticmethod
+    def _release_document_memory() -> None:
+        """在批量解析时主动归还 Docling/PyTorch 使用过的原生堆内存。"""
+        gc.collect()
+        try:
+            # Linux glibc 会缓存已释放的大块内存；malloc_trim 可把它归还给容器。
+            libc = ctypes.CDLL(None)
+            malloc_trim = getattr(libc, "malloc_trim", None)
+            if malloc_trim is not None:
+                malloc_trim(0)
+        except (OSError, TypeError):
+            # macOS 等平台没有 malloc_trim，Python 垃圾回收仍然有效。
+            pass
+
     def _validate_pdf(self, pdf_path: Path) -> bool:
-        """Comprehensive PDF validation including size and page limits.
+        """验证 PDF 文件，并记录超出解析页数上限的情况。
 
         :param pdf_path: Path to PDF file
-        :returns: True if PDF appears valid and within limits, False otherwise
+        :returns: True if PDF appears valid, False otherwise
         """
         try:
             # Check file exists and is not empty
@@ -69,16 +85,16 @@ class DoclingParser:
                     logger.error(f"File does not have PDF header: {pdf_path}")
                     raise PDFValidationError(f"File does not have PDF header: {pdf_path}")
 
-            # Check page count limit
+            # 后续通过 Docling 的 page_range 只解析前 max_pages 页；这里不能提前拒绝整篇 PDF。
             pdf_doc = pdfium.PdfDocument(str(pdf_path))
             actual_pages = len(pdf_doc)
             pdf_doc.close()
 
             if actual_pages > self.max_pages:
                 logger.warning(
-                    f"PDF has {actual_pages} pages, exceeding limit of {self.max_pages} pages. Skipping processing to avoid performance issues."
+                    f"PDF has {actual_pages} pages, exceeding limit of {self.max_pages} pages. "
+                    f"Only the first {self.max_pages} pages will be processed."
                 )
-                raise PDFValidationError(f"PDF has too many pages: {actual_pages} > {self.max_pages}")
 
             return True
 
@@ -89,8 +105,7 @@ class DoclingParser:
             raise PDFValidationError(f"Error validating PDF {pdf_path}: {e}")
 
     def parse_pdf(self, pdf_path: Path) -> Optional[PdfContent]:
-        """Parse PDF using Docling parser.
-        Limited to 20 pages to avoid memory issues with large papers.
+        """使用 Docling 解析 PDF，超长文档只处理前 ``max_pages`` 页。
 
         :param pdf_path: Path to PDF file
         :returns: PdfContent object or None if parsing failed
@@ -104,7 +119,11 @@ class DoclingParser:
 
             # Convert PDF using the modern API
             # Limit processing to avoid memory issues with large papers
-            result = self._converter.convert(str(pdf_path), max_num_pages=self.max_pages, max_file_size=self.max_file_size_bytes)
+            result = self._converter.convert(
+                str(pdf_path),
+                page_range=(1, self.max_pages),
+                max_file_size=self.max_file_size_bytes,
+            )
 
             # Extract structured content
             doc = result.document
@@ -130,7 +149,7 @@ class DoclingParser:
                 sections.append(PaperSection(title=current_section["title"], content=current_section["content"].strip()))
 
             # Focus on what arXiv API doesn't provide: structured full text content only
-            return PdfContent(
+            content = PdfContent(
                 sections=sections,
                 figures=[],  # Removed: basic metadata not useful
                 tables=[],  # Removed: basic metadata not useful
@@ -139,6 +158,11 @@ class DoclingParser:
                 parser_used=ParserType.DOCLING,
                 metadata={"source": "docling", "note": "Content extracted from PDF, metadata comes from arXiv API"},
             )
+            # PdfContent 已经只包含 Python 文本/结构；及时释放带页面图像的 DoclingDocument。
+            del doc
+            del result
+            self._release_document_memory()
+            return content
 
         except PDFValidationError as e:
             # Handle size/page limit validation errors gracefully by returning None
@@ -150,6 +174,7 @@ class DoclingParser:
                 # Re-raise other validation errors (corrupted files, etc.)
                 raise
         except Exception as e:
+            self._release_document_memory()
             logger.error(f"Failed to parse PDF with Docling: {e}")
             logger.error(f"PDF path: {pdf_path}")
             logger.error(f"PDF size: {pdf_path.stat().st_size} bytes")

@@ -72,6 +72,41 @@ class TestDoclingParser:
 
         assert "Error validating PDF" in str(exc_info.value)
 
+    @patch("src.services.pdf_parser.docling.pdfium.PdfDocument")
+    def test_validate_pdf_over_page_limit_is_truncated(self, mock_pdf_document, docling_parser, valid_pdf_path):
+        """超过页数上限的 PDF 应允许后续只解析前 max_pages 页。"""
+        pdf_document = MagicMock()
+        pdf_document.__len__.return_value = 32
+        mock_pdf_document.return_value = pdf_document
+
+        assert docling_parser._validate_pdf(valid_pdf_path) is True
+        pdf_document.close.assert_called_once_with()
+
+    @patch("src.services.pdf_parser.docling.pdfium.PdfDocument")
+    @patch.object(DoclingParser, "_release_document_memory")
+    def test_parse_pdf_limits_pages_with_page_range(
+        self, mock_release_memory, mock_pdf_document, docling_parser, valid_pdf_path
+    ):
+        """Docling 应使用 page_range 截取页面，而不是把 max_num_pages 当作截取参数。"""
+        pdf_document = MagicMock()
+        pdf_document.__len__.return_value = 32
+        mock_pdf_document.return_value = pdf_document
+
+        converted_document = MagicMock()
+        converted_document.texts = []
+        converted_document.export_to_text.return_value = "parsed text"
+        docling_parser._converter.convert = MagicMock(return_value=MagicMock(document=converted_document))
+
+        result = docling_parser.parse_pdf(valid_pdf_path)
+
+        assert result.raw_text == "parsed text"
+        mock_release_memory.assert_called_once_with()
+        docling_parser._converter.convert.assert_called_once_with(
+            str(valid_pdf_path),
+            page_range=(1, 20),
+            max_file_size=10 * 1024 * 1024,
+        )
+
     # Complex PDF parsing tests removed - too dependent on external libraries
 
 
